@@ -16,7 +16,7 @@ public class GradientOverlayView extends View {
 
     public GradientOverlayView(Context context) {
         super(context);
-        setLayerType(View.LAYER_TYPE_HARDWARE, null);
+        setBackgroundColor(Color.TRANSPARENT);
     }
 
     public void setEffect(float foldProgress, float intensity) {

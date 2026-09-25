@@ -1,5 +1,7 @@
 package com.lucas.foldgradient;
 
+import android.animation.Animator;
+import android.animation.AnimatorListenerAdapter;
 import android.animation.ValueAnimator;
 import android.app.Notification;
 import android.app.NotificationChannel;
@@ -85,7 +87,6 @@ public class FoldEffectService extends Service implements SensorEventListener, D
             return START_NOT_STICKY;
         }
 
-        ensureOverlay();
         if (intent != null && ACTION_PREVIEW.equals(intent.getAction())) {
             runFallbackAnimation();
             if (!enabled) {
@@ -104,8 +105,7 @@ public class FoldEffectService extends Service implements SensorEventListener, D
         int flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                 | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
                 | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-                | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
-                | WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED;
+                | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS;
 
         WindowManager.LayoutParams lp = new WindowManager.LayoutParams(
                 WindowManager.LayoutParams.MATCH_PARENT,
@@ -156,20 +156,24 @@ public class FoldEffectService extends Service implements SensorEventListener, D
     }
 
     private void showForHingeAngle(float angle) {
-        ensureOverlay();
-        if (!overlayAttached) return;
         float progress = clamp(angle / 180f);
         float remaining = 1f - progress;
         // Keep the effect visible through most of the opening motion, then let it melt away near flat.
         float intensity = clamp((float) (Math.pow(remaining, 0.58) * 1.75));
         if (angle >= 179f) intensity = 0f;
+        if (intensity <= 0.002f) {
+            detachOverlay();
+            return;
+        }
+        ensureOverlay();
+        if (!overlayAttached) return;
         overlayView.setEffect(progress, intensity);
     }
 
     private void runFallbackAnimation() {
+        cancelFallback();
         ensureOverlay();
         if (!overlayAttached) return;
-        cancelFallback();
         fallbackAnimator = ValueAnimator.ofFloat(0f, 1f);
         fallbackAnimator.setDuration(680L);
         fallbackAnimator.setInterpolator(new DecelerateInterpolator(1.35f));
@@ -177,6 +181,20 @@ public class FoldEffectService extends Service implements SensorEventListener, D
             float t = (float) a.getAnimatedValue();
             float intensity = (1f - t) * 0.88f;
             overlayView.setEffect(0.55f + 0.45f * t, intensity);
+        });
+        fallbackAnimator.addListener(new AnimatorListenerAdapter() {
+            private boolean cancelled;
+
+            @Override
+            public void onAnimationCancel(Animator animation) {
+                cancelled = true;
+            }
+
+            @Override
+            public void onAnimationEnd(Animator animation) {
+                if (!cancelled) detachOverlay();
+                if (fallbackAnimator == animation) fallbackAnimator = null;
+            }
         });
         fallbackAnimator.start();
     }
@@ -190,7 +208,17 @@ public class FoldEffectService extends Service implements SensorEventListener, D
 
     private void hideOverlay() {
         cancelFallback();
-        if (overlayView != null) overlayView.setEffect(1f, 0f);
+        detachOverlay();
+    }
+
+    private void detachOverlay() {
+        if (overlayAttached && windowManager != null && overlayView != null) {
+            try {
+                windowManager.removeViewImmediate(overlayView);
+            } catch (Throwable ignored) { }
+        }
+        overlayAttached = false;
+        overlayView = null;
     }
 
     private boolean isInnerDisplayActive() {
@@ -289,11 +317,6 @@ public class FoldEffectService extends Service implements SensorEventListener, D
         if (sensorManager != null) sensorManager.unregisterListener(this);
         if (displayManager != null) displayManager.unregisterDisplayListener(this);
         cancelFallback();
-        if (overlayAttached && windowManager != null && overlayView != null) {
-            try {
-                windowManager.removeView(overlayView);
-            } catch (Throwable ignored) { }
-        }
-        overlayAttached = false;
+        detachOverlay();
     }
 }
