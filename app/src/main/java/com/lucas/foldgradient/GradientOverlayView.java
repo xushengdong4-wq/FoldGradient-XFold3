@@ -22,7 +22,9 @@ public class GradientOverlayView extends View {
     public void setEffect(float foldProgress, float intensity) {
         this.foldProgress = clamp(foldProgress);
         this.intensity = clamp(intensity);
-        setVisibility(this.intensity <= 0.002f ? INVISIBLE : VISIBLE);
+        // Stay attached and visible even at zero intensity. The window remains
+        // transparent but can draw the first gradient frame without re-creation.
+        setVisibility(VISIBLE);
         invalidate();
     }
 

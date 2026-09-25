@@ -50,7 +50,17 @@ public class FoldEffectService extends Service implements SensorEventListener, D
     private boolean openingMotion = false;
     private ValueAnimator fallbackAnimator;
     private final Handler displayPollHandler = new Handler(Looper.getMainLooper());
-    private final Runnable overlaySafetyDetach = this::detachOverlay;
+    private final Runnable overlaySafetyDetach = () -> {
+        // Keep the already-created outer-display window warm, but completely
+        // transparent, so the next hinge event only needs a redraw.
+        if (!isInnerDisplayActive() && isEffectEnabled()) {
+            if (overlayAttached && overlayView != null) {
+                overlayView.setEffect(0f, 0f);
+            }
+        } else {
+            detachOverlay();
+        }
+    };
     private final Runnable displayPoll = new Runnable() {
         @Override
         public void run() {
@@ -71,7 +81,7 @@ public class FoldEffectService extends Service implements SensorEventListener, D
         hingeSensor = sensorManager == null ? null : sensorManager.getDefaultSensor(Sensor.TYPE_HINGE_ANGLE);
 
         if (sensorManager != null && hingeSensor != null) {
-            sensorManager.registerListener(this, hingeSensor, SensorManager.SENSOR_DELAY_GAME);
+            sensorManager.registerListener(this, hingeSensor, SensorManager.SENSOR_DELAY_FASTEST);
         }
         if (displayManager != null) {
             displayManager.registerDisplayListener(this, null);
@@ -99,8 +109,23 @@ public class FoldEffectService extends Service implements SensorEventListener, D
                 new Handler(Looper.getMainLooper()).postDelayed(this::stopSelf, 1100L);
                 return START_NOT_STICKY;
             }
+        } else if (enabled && !isInnerDisplayActive()) {
+            preloadOuterOverlay();
         }
         return START_STICKY;
+    }
+
+    private boolean isEffectEnabled() {
+        return getSharedPreferences("fold_gradient", Context.MODE_PRIVATE)
+                .getBoolean("enabled", false);
+    }
+
+    private void preloadOuterOverlay() {
+        if (!Settings.canDrawOverlays(this) || !isEffectEnabled() || isInnerDisplayActive()) return;
+        ensureOverlay();
+        if (overlayAttached && overlayView != null) {
+            overlayView.setEffect(0f, 0f);
+        }
     }
 
     private void ensureOverlay() {
@@ -295,6 +320,9 @@ public class FoldEffectService extends Service implements SensorEventListener, D
         }
         if (!nowInner && wasInnerDisplay) {
             hideOverlay();
+            // Wait until vivo has made the outer display the default, then attach
+            // a transparent window in advance for the next unfolding gesture.
+            displayPollHandler.postDelayed(this::preloadOuterOverlay, 180L);
         }
         wasInnerDisplay = nowInner;
     }
