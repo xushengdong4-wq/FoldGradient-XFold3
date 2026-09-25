@@ -9,6 +9,7 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.graphics.PixelFormat;
+import android.graphics.Rect;
 import android.hardware.Sensor;
 import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
@@ -41,6 +42,14 @@ public class FoldEffectService extends Service implements SensorEventListener, D
     private float smoothedAngle = Float.NaN;
     private long lastHingeMotionMs = 0L;
     private ValueAnimator fallbackAnimator;
+    private final Handler displayPollHandler = new Handler(Looper.getMainLooper());
+    private final Runnable displayPoll = new Runnable() {
+        @Override
+        public void run() {
+            handleDisplayStateChange(isInnerDisplayActive());
+            displayPollHandler.postDelayed(this, 120L);
+        }
+    };
 
     @Override
     public void onCreate() {
@@ -60,6 +69,7 @@ public class FoldEffectService extends Service implements SensorEventListener, D
             displayManager.registerDisplayListener(this, null);
         }
         wasInnerDisplay = isInnerDisplayActive();
+        displayPollHandler.post(displayPoll);
     }
 
     @Override
@@ -185,9 +195,19 @@ public class FoldEffectService extends Service implements SensorEventListener, D
 
     private boolean isInnerDisplayActive() {
         try {
-            android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
-            float longSide = Math.max(dm.widthPixels, dm.heightPixels);
-            float shortSide = Math.max(1, Math.min(dm.widthPixels, dm.heightPixels));
+            int width;
+            int height;
+            if (windowManager != null && Build.VERSION.SDK_INT >= 30) {
+                Rect bounds = windowManager.getCurrentWindowMetrics().getBounds();
+                width = bounds.width();
+                height = bounds.height();
+            } else {
+                android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+                width = dm.widthPixels;
+                height = dm.heightPixels;
+            }
+            float longSide = Math.max(width, height);
+            float shortSide = Math.max(1, Math.min(width, height));
             float ratio = longSide / shortSide;
             // X Fold3 outer display is phone-like; inner display is close to square.
             return ratio < 1.60f;
@@ -206,8 +226,10 @@ public class FoldEffectService extends Service implements SensorEventListener, D
     public void onDisplayChanged(int displayId) {
         Display d = displayManager == null ? null : displayManager.getDisplay(displayId);
         if (d != null && d.getState() == Display.STATE_OFF) return;
+        handleDisplayStateChange(isInnerDisplayActive());
+    }
 
-        boolean nowInner = isInnerDisplayActive();
+    private void handleDisplayStateChange(boolean nowInner) {
         if (nowInner && !wasInnerDisplay) {
             long age = android.os.SystemClock.elapsedRealtime() - lastHingeMotionMs;
             // If the OEM exposes no hinge sensor, or data is not arriving, use display switch as a robust fallback.
@@ -263,6 +285,7 @@ public class FoldEffectService extends Service implements SensorEventListener, D
     @Override
     public void onDestroy() {
         super.onDestroy();
+        displayPollHandler.removeCallbacks(displayPoll);
         if (sensorManager != null) sensorManager.unregisterListener(this);
         if (displayManager != null) displayManager.unregisterDisplayListener(this);
         cancelFallback();
