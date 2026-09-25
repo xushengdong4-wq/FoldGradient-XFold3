@@ -32,6 +32,10 @@ public class FoldEffectService extends Service implements SensorEventListener, D
 
     private static final String CHANNEL_ID = "fold_gradient_service";
     private static final int NOTIFICATION_ID = 7301;
+    // X Fold3 reports about 175 degrees when physically flat. Stop a few degrees
+    // before that so the translucent overlay can never remain on the open screen.
+    private static final float EFFECT_END_ANGLE = 171f;
+    private static final long OVERLAY_SAFETY_TIMEOUT_MS = 1000L;
 
     private SensorManager sensorManager;
     private Sensor hingeSensor;
@@ -42,9 +46,11 @@ public class FoldEffectService extends Service implements SensorEventListener, D
     private boolean wasInnerDisplay = false;
     private float lastAngle = Float.NaN;
     private float smoothedAngle = Float.NaN;
-    private long lastHingeMotionMs = 0L;
+    private boolean hingeDataReceived = false;
+    private boolean openingMotion = false;
     private ValueAnimator fallbackAnimator;
     private final Handler displayPollHandler = new Handler(Looper.getMainLooper());
+    private final Runnable overlaySafetyDetach = this::detachOverlay;
     private final Runnable displayPoll = new Runnable() {
         @Override
         public void run() {
@@ -128,6 +134,17 @@ public class FoldEffectService extends Service implements SensorEventListener, D
     public void onSensorChanged(SensorEvent event) {
         if (event.sensor.getType() != Sensor.TYPE_HINGE_ANGLE || event.values.length == 0) return;
         float angle = event.values[0];
+        hingeDataReceived = true;
+
+        // The hardware's flat value is ~175 degrees rather than 180 degrees.
+        if (angle >= EFFECT_END_ANGLE) {
+            lastAngle = angle;
+            smoothedAngle = angle;
+            openingMotion = false;
+            hideOverlay();
+            return;
+        }
+
         if (Float.isNaN(smoothedAngle)) smoothedAngle = angle;
         smoothedAngle = smoothedAngle * 0.72f + angle * 0.28f;
 
@@ -138,29 +155,30 @@ public class FoldEffectService extends Service implements SensorEventListener, D
 
         float delta = smoothedAngle - lastAngle;
         lastAngle = smoothedAngle;
-        if (Math.abs(delta) > 0.05f) {
-            lastHingeMotionMs = android.os.SystemClock.elapsedRealtime();
-        }
 
         if (delta < -0.35f) {
+            openingMotion = false;
             hideOverlay();
             return;
         }
 
-        if (delta > 0.10f && isInnerDisplayActive()) {
-            cancelFallback();
-            showForHingeAngle(smoothedAngle);
-        } else if (smoothedAngle >= 178f) {
+        if (delta > 0.10f) {
+            openingMotion = true;
+            if (isInnerDisplayActive()) {
+                cancelFallback();
+                showForHingeAngle(smoothedAngle);
+            }
+        } else if (smoothedAngle >= EFFECT_END_ANGLE) {
             hideOverlay();
         }
     }
 
     private void showForHingeAngle(float angle) {
-        float progress = clamp(angle / 180f);
+        float progress = clamp(angle / EFFECT_END_ANGLE);
         float remaining = 1f - progress;
         // Keep the effect visible through most of the opening motion, then let it melt away near flat.
         float intensity = clamp((float) (Math.pow(remaining, 0.58) * 1.75));
-        if (angle >= 179f) intensity = 0f;
+        if (angle >= EFFECT_END_ANGLE) intensity = 0f;
         if (intensity <= 0.002f) {
             detachOverlay();
             return;
@@ -168,6 +186,8 @@ public class FoldEffectService extends Service implements SensorEventListener, D
         ensureOverlay();
         if (!overlayAttached) return;
         overlayView.setEffect(progress, intensity);
+        displayPollHandler.removeCallbacks(overlaySafetyDetach);
+        displayPollHandler.postDelayed(overlaySafetyDetach, OVERLAY_SAFETY_TIMEOUT_MS);
     }
 
     private void runFallbackAnimation() {
@@ -197,6 +217,8 @@ public class FoldEffectService extends Service implements SensorEventListener, D
             }
         });
         fallbackAnimator.start();
+        displayPollHandler.removeCallbacks(overlaySafetyDetach);
+        displayPollHandler.postDelayed(overlaySafetyDetach, OVERLAY_SAFETY_TIMEOUT_MS);
     }
 
     private void cancelFallback() {
@@ -212,6 +234,7 @@ public class FoldEffectService extends Service implements SensorEventListener, D
     }
 
     private void detachOverlay() {
+        displayPollHandler.removeCallbacks(overlaySafetyDetach);
         if (overlayAttached && windowManager != null && overlayView != null) {
             try {
                 windowManager.removeViewImmediate(overlayView);
@@ -259,10 +282,12 @@ public class FoldEffectService extends Service implements SensorEventListener, D
 
     private void handleDisplayStateChange(boolean nowInner) {
         if (nowInner && !wasInnerDisplay) {
-            long age = android.os.SystemClock.elapsedRealtime() - lastHingeMotionMs;
-            // If the OEM exposes no hinge sensor, or data is not arriving, use display switch as a robust fallback.
-            if (hingeSensor == null || age > 350L) {
+            // A real hinge stream must always win. The old age-based fallback could
+            // replay after the sensor stopped at 175 degrees and leave a seam behind.
+            if (hingeSensor == null || !hingeDataReceived) {
                 runFallbackAnimation();
+            } else if (openingMotion && !Float.isNaN(lastAngle) && lastAngle < EFFECT_END_ANGLE) {
+                showForHingeAngle(lastAngle);
             }
         }
         if (!nowInner && wasInnerDisplay) {

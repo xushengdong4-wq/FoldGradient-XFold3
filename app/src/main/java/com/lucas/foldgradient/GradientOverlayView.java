@@ -86,22 +86,6 @@ public class GradientOverlayView extends View {
         paint.setShader(rightGlow);
         canvas.drawRect(0, 0, w, h, paint);
 
-        // A bright but soft crease glow that disappears completely when flat.
-        float lineHalf = Math.max(8f, w * (0.055f * (1f - foldProgress) + 0.008f));
-        LinearGradient crease = new LinearGradient(
-                cx - lineHalf, 0, cx + lineHalf, 0,
-                new int[]{
-                        Color.TRANSPARENT,
-                        alphaColor(Color.rgb(195, 168, 255), 0.18f * intensity),
-                        alphaColor(Color.WHITE, 0.34f * intensity),
-                        alphaColor(Color.rgb(139, 205, 255), 0.18f * intensity),
-                        Color.TRANSPARENT
-                },
-                new float[]{0f, 0.24f, 0.5f, 0.76f, 1f},
-                Shader.TileMode.CLAMP);
-        paint.setShader(crease);
-        canvas.drawRect(cx - lineHalf, 0, cx + lineHalf, h, paint);
-
         paint.setShader(null);
     }
 }
