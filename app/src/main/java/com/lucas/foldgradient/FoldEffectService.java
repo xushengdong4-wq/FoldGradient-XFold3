@@ -164,10 +164,10 @@ public class FoldEffectService extends Service implements SensorEventListener, D
 
         if (delta > 0.10f) {
             openingMotion = true;
-            if (isInnerDisplayActive()) {
-                cancelFallback();
-                showForHingeAngle(smoothedAngle);
-            }
+            // Draw on whichever display is currently active. This lets the outer
+            // display receive the first gradient frame before vivo switches it off.
+            cancelFallback();
+            showForHingeAngle(smoothedAngle);
         } else if (smoothedAngle >= EFFECT_END_ANGLE) {
             hideOverlay();
         }
@@ -287,6 +287,9 @@ public class FoldEffectService extends Service implements SensorEventListener, D
             if (hingeSensor == null || !hingeDataReceived) {
                 runFallbackAnimation();
             } else if (openingMotion && !Float.isNaN(lastAngle) && lastAngle < EFFECT_END_ANGLE) {
+                // Recreate the window after the default display changes so the
+                // same angle-driven effect continues on the newly active inner screen.
+                detachOverlay();
                 showForHingeAngle(lastAngle);
             }
         }
